@@ -7,54 +7,46 @@ import pydivert
 import keyboard
 
 # --- AYARLAR ---
-LAG_KEY = "x"  # Lag switch'i tetikleyecek tuş
+TARGET_PROCESS = "sonoyuncuclient.exe"  # Hedef süreç güncellendi
+LAG_KEY = "x"                           # Tetikleme tuşu
 # ---------------
 
 is_lagging = False
 game_ip = None
-target_process = None
 filter_thread = None
+running = True
 
-def get_running_processes():
-    """Arka planda çalışan aktif .exe süreçlerini listeler"""
-    processes = set()
-    for proc in psutil.process_iter(['name']):
-        try:
-            name = proc.info['name']
-            if name and name.endswith(".exe"):
-                processes.add(name)
-        except (psutil.NoSuchProcess, psutil.AccessDenied):
-            pass
-    return sorted(list(processes))
-
-def find_game_ip_and_start_filter(process_name, status_label):
-    """Seçilen oyunun harici IP'sini bulur ve WinDivert filtresini başlatır"""
-    global game_ip, is_lagging
+def get_game_ip(status_label):
+    """SonOyuncu uzak sunucu IP'sini bulur"""
+    global game_ip
+    status_label.config(text="SonOyuncu ağ bağlantısı aranıyor...\nLütfen bir sunucuya/maça girin.", foreground="orange")
     
-    status_label.config(text=f"[{process_name}] için ağ bağlantısı aranıyor...\nLütfen oyunda bir maça girin.", foreground="orange")
-    
-    # Oyun sunucu IP'sini bulma döngüsü
-    while game_ip is None and target_process == process_name:
+    while game_ip is None and running:
         for proc in psutil.process_iter(['name']):
             try:
-                if proc.info['name'].lower() == process_name.lower():
+                if proc.info['name'].lower() == TARGET_PROCESS.lower():
                     connections = proc.connections(kind='inet')
                     for conn in connections:
                         if conn.status == 'ESTABLISHED' and conn.raddr:
-                            # Yerel ağ IP'lerini filtrele
-                            if not conn.raddr.ip.startswith("127.") and not conn.raddr.ip.startswith("192.168."):
-                                game_ip = conn.raddr.ip
-                                break
+                            ip = conn.raddr.ip
+                            # Yerel ağ adreslerini filtrele
+                            if not ip.startswith(("127.", "192.168.", "10.", "172.")):
+                                game_ip = ip
+                                return
             except (psutil.NoSuchProcess, psutil.AccessDenied):
                 pass
-        time.sleep(1)
-    
-    if target_process != process_name:
-        return # Eğer kullanıcı başka bir süreç seçtiyse iptal et
+        time.sleep(0.5)
 
-    status_label.config(text=f"Bağlantı Kuruldu!\nIP: {game_ip}\nOyun içinde '{LAG_KEY.upper()}' tuşuna basılı tutun.", foreground="green")
+def lag_switch_worker(status_label):
+    """WinDivert filtre döngüsü"""
+    global game_ip, is_lagging
     
-    # WinDivert Ağ Filtresi
+    get_game_ip(status_label)
+    if not running or game_ip is None:
+        return
+        
+    status_label.config(text=f"SonOyuncu Bağlantısı Yakalandı!\nIP: {game_ip}\n'{LAG_KEY.upper()}' tuşuna basılı tutun.", foreground="green")
+    
     filter_string = f"ip.DstAddr == {game_ip} and outbound"
     try:
         with pydivert.WinDivert(filter_string) as w:
@@ -64,10 +56,10 @@ def find_game_ip_and_start_filter(process_name, status_label):
                 else:
                     w.send(packet)
     except Exception as e:
-        status_label.config(text=f"Sürücü Hatası!\nYönetici olarak çalıştırdığınızdan emin olun.", foreground="red")
+        status_label.config(text="Sürücü Hatası! Sağ tıklayıp\nYönetici Olarak Çalıştırın.", foreground="red")
 
 def on_key_event(e):
-    """Klavye tuş basışlarını dinler"""
+    """Tuş hareketlerini dinler ve menüde bildirim verir"""
     global is_lagging
     if game_ip is None:
         return
@@ -75,60 +67,38 @@ def on_key_event(e):
     if e.name == LAG_KEY:
         if e.event_type == keyboard.KEY_DOWN and not is_lagging:
             is_lagging = True
+            # Menüde görsel bildirim ver
+            status_lbl.config(text=">>> LAG AKTİF <<<", foreground="red")
+            
         elif e.event_type == keyboard.KEY_UP and is_lagging:
             is_lagging = False
+            # Menü bildirimini temizle ve eski haline getir
+            status_lbl.config(text=f"Bağlantı Temiz.\nIP: {game_ip}", foreground="green")
 
-def start_lag_switch(combobox, status_label):
-    """Seçilen süreç için arka plan thread'lerini tetikler"""
-    global target_process, game_ip, filter_thread
-    
-    selected = combobox.get()
-    if not selected:
-        messagebox.showwarning("Uyarı", "Lütfen listeden bir oyun/süreç seçin!")
-        return
-    
-    target_process = selected
-    game_ip = None # Eski IP'yi temizle
-    
-    # Arayüzün donmaması için ağ dinleyicisini yeni bir Thread'de başlat
-    filter_thread = threading.Thread(target=find_game_ip_and_start_filter, args=(target_process, status_label), daemon=True)
-    filter_thread.start()
+def on_closing():
+    global running
+    running = False
+    root.destroy()
 
-def refresh_list(combobox):
-    """Süreç listesini günceller"""
-    procs = get_running_processes()
-    combobox['values'] = procs
-    if procs:
-        combobox.set("Bir süreç seçin...")
-
-# --- TKINTER ARAYÜZÜ ---
+# --- GÖRSEL ARAYÜZ ---
 root = tk.Tk()
-root.title("Lag Switch Manager")
-root.geometry("400x250")
+root.title("SonOyuncu Lag Switch")
+root.geometry("380x200")
 root.resizable(False, False)
+root.protocol("WM_DELETE_WINDOW", on_closing)
 
 frame = ttk.Frame(root, padding="20")
 frame.pack(fill=tk.BOTH, expand=True)
 
-# Süreç Seçim Alanı
-ttk.Label(frame, text="Hedef Oyunu Seçin (.exe):", font=("Arial", 10, "bold")).pack(anchor=tk.W, pady=5)
-proc_combobox = ttk.Combobox(frame, width=40, state="readonly")
-proc_combobox.pack(fill=tk.X, pady=5)
+title_lbl = ttk.Label(frame, text="SonOyuncu Otocut Geciktirici", font=("Arial", 11, "bold"))
+title_lbl.pack(pady=5)
 
-# Butonlar Paneli
-btn_frame = ttk.Frame(frame)
-btn_frame.pack(fill=tk.X, pady=10)
-
-ttk.Button(btn_frame, text="Yenile", command=lambda: refresh_list(proc_combobox)).pack(side=tk.LEFT, padx=5)
-ttk.Button(btn_frame, text="Filtreyi Başlat", command=lambda: start_lag_switch(proc_combobox, status_lbl)).pack(side=tk.RIGHT, padx=5)
-
-# Durum Bilgisi
-status_lbl = ttk.Label(frame, text="Lütfen listeden oyununuzu seçip Başlat'a tıklayın.", font=("Arial", 9), justify=tk.CENTER)
+status_lbl = ttk.Label(frame, text="Sistem başlatılıyor...", font=("Arial", 10, "bold"), justify=tk.CENTER)
 status_lbl.pack(pady=20)
 
-# İlk yüklemede süreçleri getir ve klavyeyi dinlemeye başla
-refresh_list(proc_combobox)
+# Klavye dinleyicisini bağla ve işlemi başlat
 keyboard.hook(on_key_event)
+filter_thread = threading.Thread(target=lag_switch_worker, args=(status_lbl,), daemon=True)
+filter_thread.start()
 
 root.mainloop()
-  
