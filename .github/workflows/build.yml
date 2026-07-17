@@ -1,4 +1,4 @@
-name: Build Game Lag Switch Exe
+name: Build SonOyuncu Lag Switch
 
 on:
   push:
@@ -13,25 +13,35 @@ jobs:
     steps:
     - name: Kodu Klonla
       uses: actions/checkout@v4
+      with:
+        repository: ${{ github.repository }}
+        path: 'sonoyuncu_proje'
 
     - name: Python Kurulumu
       uses: actions/setup-python@v5
       with:
         python-version: '3.10'
-        cache: 'pip' # Bağımlılıkları önbelleğe alarak sonraki çalışmalarda hızı artırır
 
     - name: Bağımlılıkları Yükle
+      working-directory: 'sonoyuncu_proje'
       run: |
         python -m pip install --upgrade pip
         pip install pydivert psutil keyboard pyinstaller
 
-    - name: PyInstaller ile EXE'ye Dönüştür
+    - name: Klasör Tabanlı EXE Derleme (Temp Hatasız)
+      working-directory: 'sonoyuncu_proje'
       run: |
-        pyinstaller --noconsole --onefile --uac-admin main.py
+        # --onedir parametresi Temp hatasını kesin olarak çözer
+        pyinstaller --noconsole --onedir --uac-admin main.py
 
-    - name: Hazır EXE Dosyasını GitHub'a Yükle (Artifact)
+    - name: Klasörü ZIP Olarak Paketle
+      working-directory: 'sonoyuncu_proje/dist'
+      run: |
+        powershell Compress-Archive -Path main -DestinationPath ../../SonOyuncu-LagSwitch.zip
+
+    - name: Hazır ZIP Dosyasını GitHub'a Yükle
       uses: actions/upload-artifact@v4
       with:
-        name: Lag-Switch-Windows-Exe
-        path: dist/main.exe
+        name: SonOyuncu-LagSwitch-Klasor
+        path: SonOyuncu-LagSwitch.zip
         
